@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: skillhub-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./back/src/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - skillhub-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  back:
+    build:
+      context: ./back
+      dockerfile: Dockerfile
+    container_name: skillhub-back
+    environment:
+      PORT: ${PORT}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      FRONT_URL: http://front:80
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - skillhub-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${PORT}/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  front:
+    build:
+      context: ./front
+      dockerfile: Dockerfile
+      args:
+        VITE_BACK_URL: http://localhost:3001
+    container_name: skillhub-front
+    ports:
+      - "8080:80"
+    depends_on:
+      back:
+        condition: service_healthy
+    networks:
+      - skillhub-network
+
+networks:
+  skillhub-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
