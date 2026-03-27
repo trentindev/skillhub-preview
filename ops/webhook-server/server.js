@@ -1,62 +1,74 @@
+import { exec } from "child_process";
 import crypto from "crypto";
 import "dotenv/config";
 import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const app = express();
 
-// Configuration runtime : port d'écoute et secret partagé avec GitHub.
+// Paramètres de runtime : port d'écoute et secret partagé avec GitHub.
 const PORT = process.env.WEBHOOK_PORT || 4000;
 const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET;
 
-
+// Le serveur refuse de démarrer sans secret pour éviter tout webhook non authentifié.
 if (!WEBHOOK_SECRET) {
   console.error("Erreur : GITHUB_WEBHOOK_SECRET non défini dans le fichier .env");
   process.exit(1);
 }
 
-// On conserve le body brut pour recalculer la signature HMAC exactement comme GitHub.
-app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
-}));
+// Calcul d'un chemin absolu robuste vers le script pipeline, quel que soit le cwd.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const pipelineScriptPath = path.resolve(__dirname, "../scripts/pipeline.sh");
+
+// On conserve le body brut pour recalculer la signature HMAC à l'identique de GitHub.
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 
 function verifyGitHubSignature(req) {
-  // Signature envoyée par GitHub dans l'en-tête HTTP.
+  // Signature officielle envoyée par GitHub dans l'en-tête.
   const signatureHeader = req.get("X-Hub-Signature-256");
 
-  if (!signatureHeader) {    
+  if (!signatureHeader || !req.rawBody) {
     return false;
   }
 
-  const expectedSignature = "sha256=" + crypto
-    .createHmac("sha256", WEBHOOK_SECRET)
-    .update(req.rawBody)
-    .digest("hex");
+  const expectedSignature =
+    "sha256=" +
+    crypto
+      .createHmac("sha256", WEBHOOK_SECRET)
+      .update(req.rawBody)
+      .digest("hex");
 
   const signatureBuffer = Buffer.from(signatureHeader, "utf8");
   const expectedBuffer = Buffer.from(expectedSignature, "utf8");
 
-  if (signatureBuffer.length !== expectedBuffer.length) {  
-
+  if (signatureBuffer.length !== expectedBuffer.length) {
     return false;
   }
 
-  // Comparaison en temps constant pour éviter les attaques timing.
+  // Comparaison en temps constant pour limiter les attaques par timing.
   return crypto.timingSafeEqual(signatureBuffer, expectedBuffer);
 }
-s
-// Endpoint de supervision simple pour vérifier que le service répond.
+
+// Endpoint de santé pour supervision/monitoring.
 app.get("/status", (req, res) => {
   res.status(200).json({
     service: "skillhub-webhook-server",
     status: "running",
     signature_check: "enabled",
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 
-// Point d'entrée des webhooks GitHub.
+// Point d'entrée principal des webhooks GitHub.
 app.post("/webhook", (req, res) => {
   const githubEvent = req.get("X-GitHub-Event") || "unknown";
   const githubDelivery = req.get("X-GitHub-Delivery") || "unknown";
@@ -69,21 +81,21 @@ app.post("/webhook", (req, res) => {
 
   const isValidSignature = verifyGitHubSignature(req);
 
-  // Rejette toute requête non authentifiée par la signature GitHub.
+  // Toute requête sans signature valide est rejetée immédiatement.
   if (!isValidSignature) {
     console.error("Signature invalide ou absente.");
     return res.status(401).json({
       status: "error",
-      message: "Signature GitHub invalide"
+      message: "Signature GitHub invalide",
     });
   }
 
-  // Pour l'instant, seul l'événement push est traité.
+  // On ne traite que les événements push pour ce service.
   if (githubEvent !== "push") {
     return res.status(202).json({
       status: "ignored",
       message: "Événement reçu mais non traité pour le moment",
-      event: githubEvent
+      event: githubEvent,
     });
   }
 
@@ -98,13 +110,42 @@ app.post("/webhook", (req, res) => {
   console.log(`Auteur      : ${author}`);
   console.log(`Commit      : ${commitMessage}`);
 
-  // Réponse concise confirmant la bonne réception du webhook authentifié.
+  // Garde-fou métier : pipeline déclenché uniquement sur la branche main.
+  if (branch !== "refs/heads/main") {
+    return res.status(202).json({
+      status: "ignored",
+      message: "Push reçu mais branche non ciblée",
+      branch,
+    });
+  }
+
+  console.log("Déclenchement du pipeline...");
+
+  // Exécution asynchrone du pipeline ; la réponse HTTP n'attend pas la fin du script.
+  exec(`bash "${pipelineScriptPath}"`, (error, stdout, stderr) => {
+    if (error) {
+      console.error("Erreur lors de l'exécution du pipeline :", error.message);
+      return;
+    }
+
+    if (stdout) {
+      console.log("Sortie pipeline :");
+      console.log(stdout);
+    }
+
+    if (stderr) {
+      console.error("Erreurs pipeline :");
+      console.error(stderr);
+    }
+  });
+
+  // Accusé de réception rapide à GitHub après validation + déclenchement.
   return res.status(200).json({
     status: "ok",
-    message: "Webhook GitHub authentifié et reçu avec succès",
+    message: "Webhook GitHub authentifié et pipeline déclenché",
     branch,
     repository,
-    author
+    author,
   });
 });
 
