@@ -5,7 +5,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 LOG_DIR="$PROJECT_ROOT/logs"
 mkdir -p "$LOG_DIR"
 
-LOG_FILE="./ops/logs/pipeline.log"
+LOG_FILE="$LOG_DIR/pipeline.log"
 
 echo "----------------------------------------" >> $LOG_FILE
 echo "Date: $(date)" >> $LOG_FILE
