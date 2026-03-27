@@ -1,4 +1,9 @@
 #!/bin/bash
+# Détection du répertoire racine du projet et création du répertoire logs s'il n'existe pas
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+LOG_DIR="$PROJECT_ROOT/logs"
+mkdir -p "$LOG_DIR"
 
 LOG_FILE="./ops/logs/pipeline.log"
 
