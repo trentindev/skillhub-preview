@@ -32,6 +32,30 @@ app.use(
     },
   })
 );
+//
+function verifyGitHubSignature(req) {
+  const signatureHeader = req.get("X-Hub-Signature-256");
+
+  if (!signatureHeader || !req.rawBody) {
+    return false;
+  }
+
+  const expectedSignature =
+    "sha256=" +
+    crypto
+      .createHmac("sha256", WEBHOOK_SECRET)
+      .update(req.rawBody)
+      .digest("hex");
+
+  const signatureBuffer = Buffer.from(signatureHeader, "utf8");
+  const expectedBuffer = Buffer.from(expectedSignature, "utf8");
+
+  if (signatureBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(signatureBuffer, expectedBuffer);
+}
 
 // Endpoint de sante simple pour supervision (Docker, load balancer, etc.).
 app.get("/status", (req, res) => {
